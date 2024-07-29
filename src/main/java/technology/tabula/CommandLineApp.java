@@ -8,6 +8,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import java.util.HashMap;
+import java.lang.Float;
+import java.lang.Integer;
+import com.google.gson.Gson;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.HelpFormatter;
@@ -263,6 +268,10 @@ public class CommandLineApp {
     private static TableExtractor createExtractor(CommandLine line) throws ParseException {
         TableExtractor extractor = new TableExtractor();
         extractor.setGuess(line.hasOption('g'));
+        extractor.setGuessOnly(line.hasOption('x'));
+        if(line.hasOption('x')){
+            extractor.setGuess(true);
+        }
         extractor.setMethod(CommandLineApp.whichExtractionMethod(line));
         extractor.setUseLineReturns(line.hasOption('u'));
 
@@ -310,6 +319,7 @@ public class CommandLineApp {
         o.addOption("t", "stream", false, "Force PDF to be extracted using stream-mode extraction (if there are no ruling lines separating each cell)");
         o.addOption("i", "silent", false, "Suppress all stderr output.");
         o.addOption("u", "use-line-returns", false, "Use embedded line returns in cells. (Only in spreadsheet mode.)");
+        o.addOption("x", "guess-only", false, "Only output the portions of the pages guessed to analyze instead of the extracted version. When set forces -g to be true.");
         // o.addOption("d", "debug", false, "Print detected table areas instead of processing.");
         o.addOption(Option.builder("b")
                 .longOpt("batch")
@@ -364,6 +374,7 @@ public class CommandLineApp {
 
     private static class TableExtractor {
         private boolean guess = false;
+        private boolean guessOnly = false;
         private boolean useLineReturns = false;
         private BasicExtractionAlgorithm basicExtractor = new BasicExtractionAlgorithm();
         private SpreadsheetExtractionAlgorithm spreadsheetExtractor = new SpreadsheetExtractionAlgorithm();
@@ -387,6 +398,10 @@ public class CommandLineApp {
         public void setGuess(boolean guess) {
             this.guess = guess;
         }
+        
+        public void setGuessOnly(boolean guessOnly){
+            this.guessOnly = guessOnly;
+        }
 
         public void setUseLineReturns(boolean useLineReturns) {
             this.useLineReturns = useLineReturns;
@@ -403,6 +418,9 @@ public class CommandLineApp {
                         ExtractionMethod.SPREADSHEET :
                         ExtractionMethod.BASIC;
             }
+            if(guessOnly){
+                effectiveMethod = ExtractionMethod.BASIC;
+            }
             switch (effectiveMethod) {
                 case BASIC:
                     return extractTablesBasic(page);
@@ -411,6 +429,22 @@ public class CommandLineApp {
                 default:
                     return new ArrayList<>();
             }
+        }
+
+        private Table guessDataToTable(Rectangle guessRect, int pageNumber, float pageHeight, float pageWidth){
+            Table t = new Table(basicExtractor);
+            Gson gson = new Gson();
+            HashMap<String, String> guessData = new HashMap<String, String>();
+            guessData.put("top", Float.toString(guessRect.getTop() / pageHeight * 100.0f));
+            guessData.put("bottom", Float.toString(guessRect.getBottom() / pageHeight * 100.0f));
+            guessData.put("left", Float.toString(guessRect.getLeft() / pageWidth * 100.0f));
+            guessData.put("right", Float.toString(guessRect.getRight() / pageWidth * 100.0f));
+            guessData.put("page", Integer.toString(pageNumber));
+            String jsonEncoded = gson.toJson(guessData);
+            TextElement dummy = new TextElement(0.0f, 0.0f, 0.0f, 0.0f, null, 0.0f, jsonEncoded, 0.0f, 0.0f);
+            TextChunk dummyChunk = new TextChunk(dummy);
+            t.add(dummyChunk, 0, 0);
+            return t;
         }
 
         public List<Table> extractTablesBasic(Page page) {
@@ -422,8 +456,12 @@ public class CommandLineApp {
                 List<Table> tables = new ArrayList<>();
 
                 for (Rectangle guessRect : guesses) {
-                    Page guess = page.getArea(guessRect);
-                    tables.addAll(basicExtractor.extract(guess));
+                    if(guessOnly){
+                        tables.add(guessDataToTable(guessRect, page.getPageNumber(), (float)page.getHeight(), (float)page.getWidth()));
+                    } else {
+                        Page guess = page.getArea(guessRect);
+                        tables.addAll(basicExtractor.extract(guess));
+                    }
                 }
                 return tables;
             }
